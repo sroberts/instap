@@ -405,19 +405,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		
-		// Header (2) + Footer (1) + Window Borders (2) = 5 lines of chrome
-		contentWidth := msg.Width - 4 // minus borders and padding
-		contentHeight := msg.Height - 5 // minus header, footer, and borders
+		// Exact content area calculation
+		// Borders (2) + Padding (2) = 4 horizontal
+		// Header (1) + Borders (2) + Footer (1) = 4 vertical
+		contentWidth := msg.Width - 4
+		contentHeight := msg.Height - 4
 
 		if contentHeight < 0 {
 			contentHeight = 0
+		}
+		if contentWidth < 0 {
+			contentWidth = 0
 		}
 
 		m.list.SetSize(contentWidth, contentHeight)
 		m.folderList.SetSize(contentWidth, contentHeight)
 		m.viewport.Width = contentWidth
-		m.viewport.Height = contentHeight - 3 // minus internal reading titles/help
-		m.tagInput.Width = contentWidth - 10
+		m.viewport.Height = contentHeight - 3
+		m.tagInput.Width = contentWidth - 4
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -445,11 +450,8 @@ func (m model) View() string {
 
 	header := headerStyle.Render(" INSTAPAPER ")
 	
-	// Recalculate inner dimensions
-	// Header: 1 line + 1 margin = 2 lines
-	// Footer: 1 line
-	// Available for window: m.height - 3
-	windowHeight := m.height - 3
+	// Subtract 4 from height for Header (1), Footer (1), and Borders (2)
+	windowHeight := m.height - 4
 	if windowHeight < 0 {
 		windowHeight = 0
 	}
@@ -458,7 +460,7 @@ func (m model) View() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(overlayColor).
 		Padding(0, 1).
-		Width(m.width).
+		Width(m.width - 2). // Border adds 2 to total width
 		Height(windowHeight)
 
 	var content string
@@ -472,7 +474,6 @@ func (m model) View() string {
 		if m.selectedItem != nil {
 			title = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
 		}
-		// The viewport height is already constrained in Update
 		content = title + m.viewport.View() + "\n" + m.helpView()
 	case stateTagging:
 		content = fmt.Sprintf(
@@ -500,7 +501,12 @@ func (m model) View() string {
 	}
 	
 	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
-	footerStatus := footerStyle.Copy().Width(m.width - lipgloss.Width(footerInfo)).Render(status)
+	// Width of footer status should be total width minus info width
+	statusWidth := m.width - lipgloss.Width(footerInfo)
+	if statusWidth < 0 {
+		statusWidth = 0
+	}
+	footerStatus := footerStyle.Copy().Width(statusWidth).Render(status)
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
