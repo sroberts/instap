@@ -452,15 +452,18 @@ func (i folderItem) Title() string       { return i.folder.Title }
 func (i folderItem) Description() string { return fmt.Sprintf("ID: %d", i.folder.ID) }
 func (i folderItem) FilterValue() string { return i.folder.Title }
 
-func openBrowser(url string) {
+func openBrowser(u string) {
+	if !api.IsValidURL(u) {
+		return
+	}
 	var err error
 	switch runtime.GOOS {
 	case "linux":
-		err = exec.Command("xdg-open", url).Start()
+		err = exec.Command("xdg-open", u).Start()
 	case "windows":
-		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", u).Start()
 	case "darwin":
-		err = exec.Command("open", url).Start()
+		err = exec.Command("open", u).Start()
 	default:
 		err = fmt.Errorf("unsupported platform")
 	}

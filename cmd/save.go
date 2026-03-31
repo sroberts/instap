@@ -14,6 +14,10 @@ var saveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		bookmarkURL := args[0]
+		if !api.IsValidURL(bookmarkURL) {
+			fmt.Printf("Invalid URL: %s (Must start with http:// or https://)\n", bookmarkURL)
+			return
+		}
 
 		consumerKey := viper.GetString("consumer_key")
 		consumerSecret := viper.GetString("consumer_secret")

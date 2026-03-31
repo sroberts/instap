@@ -70,22 +70,26 @@ func saveFromStdin() {
 		}
 
 		parts := strings.Fields(line)
-		url := parts[0]
+		bookmarkURL := parts[0]
+		if !api.IsValidURL(bookmarkURL) {
+			fmt.Printf("Skipping invalid URL: %s\n", bookmarkURL)
+			continue
+		}
 		var tags []string
 		if len(parts) > 1 {
 			tags = strings.Split(parts[1], ",")
 		}
 
-		bookmark, err := client.AddBookmark(url)
+		bookmark, err := client.AddBookmark(bookmarkURL)
 		if err != nil {
-			fmt.Printf("Error saving %s: %v\n", url, err)
+			fmt.Printf("Error saving %s: %v\n", bookmarkURL, err)
 			continue
 		}
 
 		if len(tags) > 0 {
 			err = client.SetTags(bookmark.ID, tags)
 			if err != nil {
-				fmt.Printf("Error tagging %s: %v\n", url, err)
+				fmt.Printf("Error tagging %s: %v\n", bookmarkURL, err)
 			}
 		}
 

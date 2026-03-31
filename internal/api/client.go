@@ -13,6 +13,21 @@ import (
 
 const BaseURL = "https://www.instapaper.com/api/1"
 
+// IsValidURL checks if a string is a valid HTTP/HTTPS URL.
+func IsValidURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Host == "" {
+		return false
+	}
+	return true
+}
+
 type Client struct {
 	Config      *oauth1.Config
 	Token       *oauth1.Token

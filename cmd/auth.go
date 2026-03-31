@@ -3,10 +3,12 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/sroberts/instap/internal/api"
+	"golang.org/x/term"
 )
 
 var authCmd = &cobra.Command{
@@ -29,18 +31,22 @@ var setCredentialsCmd = &cobra.Command{
 		viper.Set("consumer_key", key)
 		viper.Set("consumer_secret", secret)
 
-		if err := viper.WriteConfig(); err != nil {
-			// If config doesn't exist, create it.
-			home, _ := os.UserHomeDir()
-			configPath := home + "/.instap.yaml"
-			if err := viper.WriteConfigAs(configPath); err != nil {
+		home, _ := os.UserHomeDir()
+		configPath := home + "/.instap.yaml"
+
+		// Use WriteConfigAs to ensure the file is created with 0600 permissions.
+		if err := viper.WriteConfigAs(configPath); err != nil {
+			// If file already exists, viper might fail WriteConfigAs. 
+			// We can try to just WriteConfig if it already exists.
+			if err := viper.WriteConfig(); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 				return
 			}
-			fmt.Printf("Config created and saved to %s\n", configPath)
-		} else {
-			fmt.Println("Credentials updated successfully.")
 		}
+
+		// Ensure 0600 permissions
+		os.Chmod(configPath, 0600)
+		fmt.Printf("Credentials updated successfully and saved to %s (permissions: 0600)\n", configPath)
 	},
 }
 
@@ -56,12 +62,18 @@ var loginCmd = &cobra.Command{
 			return
 		}
 
-		var username, password string
+		var username string
 		fmt.Print("Username (email): ")
 		fmt.Scanln(&username)
+
 		fmt.Print("Password: ")
-		// Note: In a real app, use a package like 'gopass' for secure password entry
-		fmt.Scanln(&password)
+		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			fmt.Printf("\nError reading password: %v\n", err)
+			return
+		}
+		password := string(bytePassword)
+		fmt.Println() // Add newline after password entry
 
 		token, secret, err := api.GetAccessToken(consumerKey, consumerSecret, username, password)
 		if err != nil {
