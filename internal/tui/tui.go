@@ -5,10 +5,12 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,9 +19,15 @@ import (
 	"github.com/sroberts/instap/internal/api"
 )
 
-var docStyle = lipgloss.NewStyle().Margin(1, 2)
-var statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Italic(true)
-var tagStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Italic(true)
+var (
+	docStyle     = lipgloss.NewStyle().Margin(0, 2)
+	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Italic(true)
+	tagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Italic(true)
+	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
+	headerStyle  = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Padding(0, 1).Bold(true)
+	footerStyle  = lipgloss.NewStyle().Background(lipgloss.Color("235")).Foreground(lipgloss.Color("243")).Padding(0, 1)
+	readerHeader = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Underline(true)
+)
 
 type listKeyMap struct {
 	archive key.Binding
@@ -109,22 +117,26 @@ type model struct {
 	folderList   list.Model
 	viewport     viewport.Model
 	tagInput     textinput.Model
+	spinner      spinner.Model
 	client       *api.Client
 	state        state
 	status       string
+	isError      bool
+	isLoading    bool
 	selectedItem *item
 	width        int
 	height       int
 }
 
 type statusMsg string
+type clearStatusMsg struct{}
 type errMsg error
 type bookmarksMsg []api.Bookmark
 type foldersMsg []api.Folder
 type contentMsg string
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return m.spinner.Tick
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -147,6 +159,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.state == stateTagging {
+			switch msg.String() {
+			case "enter":
+				if m.selectedItem != nil {
+					tagList := strings.Split(m.tagInput.Value(), ",")
+					var tags []string
+					for _, t := range tagList {
+						trimmed := strings.TrimSpace(t)
+						if trimmed != "" {
+							tags = append(tags, trimmed)
+						}
+					}
+					m.isLoading = true
+					return m, tea.Batch(m.setTags(m.selectedItem.bookmark.ID, tags), m.spinner.Tick)
+				}
+			case "esc":
+				m.state = stateBrowsing
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.tagInput, cmd = m.tagInput.Update(msg)
+			return m, cmd
+		}
+
 		if m.state == stateBrowsing {
 			switch {
 			case key.Matches(msg, keys.tag):
@@ -163,38 +199,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ok {
 					openBrowser(i.bookmark.URL)
 					m.status = "Opened in browser"
+					return m, m.clearStatusAfter(2 * time.Second)
 				}
 				return m, nil
 			case key.Matches(msg, keys.read):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
+					m.selectedItem = &i
 					m.status = "Fetching content..."
-					return m, m.fetchAndRender(i.bookmark)
+					m.isLoading = true
+					return m, tea.Batch(m.fetchAndRender(i.bookmark), m.spinner.Tick)
 				}
 			case key.Matches(msg, keys.archive):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
-					return m, m.archiveBookmark(i.bookmark.ID)
+					m.isLoading = true
+					return m, tea.Batch(m.archiveBookmark(i.bookmark.ID), m.spinner.Tick)
 				}
 			case key.Matches(msg, keys.delete):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
-					return m, m.deleteBookmark(i.bookmark.ID)
+					m.isLoading = true
+					return m, tea.Batch(m.deleteBookmark(i.bookmark.ID), m.spinner.Tick)
 				}
 			case key.Matches(msg, keys.star):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
-					return m, m.toggleStar(i.bookmark)
+					m.isLoading = true
+					return m, tea.Batch(m.toggleStar(i.bookmark), m.spinner.Tick)
 				}
 			case key.Matches(msg, keys.refresh):
 				m.status = "Refreshing..."
-				return m, m.fetchBookmarks()
+				m.isLoading = true
+				return m, tea.Batch(m.fetchBookmarks(), m.spinner.Tick)
 			case key.Matches(msg, keys.move):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
 					m.selectedItem = &i
 					m.status = "Fetching folders..."
-					return m, m.fetchFolders()
+					m.isLoading = true
+					return m, tea.Batch(m.fetchFolders(), m.spinner.Tick)
 				}
 			case msg.String() == "q":
 				return m, tea.Quit
@@ -204,33 +248,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				f, ok := m.folderList.SelectedItem().(folderItem)
 				if ok && m.selectedItem != nil {
-					return m, m.moveBookmark(m.selectedItem.bookmark.ID, f.folder.ID)
+					m.isLoading = true
+					return m, tea.Batch(m.moveBookmark(m.selectedItem.bookmark.ID, f.folder.ID), m.spinner.Tick)
 				}
 			case "esc", "q":
 				m.state = stateBrowsing
 				return m, nil
 			}
-		} else if m.state == stateTagging {
-			switch msg.String() {
-			case "enter":
-				if m.selectedItem != nil {
-					tagList := strings.Split(m.tagInput.Value(), ",")
-					var tags []string
-					for _, t := range tagList {
-						trimmed := strings.TrimSpace(t)
-						if trimmed != "" {
-							tags = append(tags, trimmed)
-						}
-					}
-					return m, m.setTags(m.selectedItem.bookmark.ID, tags)
-				}
-			case "esc":
-				m.state = stateBrowsing
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.tagInput, cmd = m.tagInput.Update(msg)
-			return m, cmd
 		}
 
 	case contentMsg:
@@ -238,14 +262,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(string(msg))
 		m.viewport.GotoTop()
 		m.status = ""
+		m.isLoading = false
 		return m, nil
 
 	case statusMsg:
 		m.status = string(msg)
+		m.isError = false
+		return m, m.clearStatusAfter(3 * time.Second)
+
+	case clearStatusMsg:
+		m.status = ""
+		m.isError = false
 		return m, nil
 
 	case errMsg:
 		m.status = fmt.Sprintf("Error: %v", msg)
+		m.isError = true
+		m.isLoading = false
 		return m, nil
 
 	case bookmarksMsg:
@@ -254,7 +287,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = item{bookmark: b}
 		}
 		m.list.SetItems(items)
-		m.status = "Updated"
+		m.isLoading = false
 		return m, nil
 
 	case foldersMsg:
@@ -264,17 +297,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.folderList.SetItems(items)
 		m.state = stateMoving
-		m.status = "Select folder"
+		m.isLoading = false
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		h, v := docStyle.GetFrameSize()
-		m.list.SetSize(msg.Width-h, msg.Height-v-2)
-		m.folderList.SetSize(msg.Width-h, msg.Height-v-2)
+		m.list.SetSize(msg.Width-h, msg.Height-v-4)
+		m.folderList.SetSize(msg.Width-h, msg.Height-v-4)
 		m.viewport.Width = msg.Width - h
-		m.viewport.Height = msg.Height - v - 2
+		m.viewport.Height = msg.Height - v - 4
+		m.tagInput.Width = msg.Width - h - 10
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	if m.state == stateBrowsing {
@@ -291,32 +330,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	var s string
+	header := headerStyle.Render(" INSTAPAPER ")
+	var content string
 	switch m.state {
 	case stateBrowsing:
-		s = m.list.View()
+		content = m.list.View()
 	case stateMoving:
-		s = m.folderList.View()
+		content = m.folderList.View()
 	case stateReading:
-		s = m.viewport.View() + "\n" + m.helpView()
+		title := ""
+		if m.selectedItem != nil {
+			title = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n\n"
+		}
+		content = title + m.viewport.View() + "\n" + m.helpView()
 	case stateTagging:
-		s = fmt.Sprintf(
-			"Tags for: %s\n\n%s\n\n(enter to save, esc to cancel)",
+		content = fmt.Sprintf(
+			"\n  Tags for: %s\n\n  %s\n\n  (enter to save, esc to cancel)",
 			m.selectedItem.bookmark.Title,
 			m.tagInput.View(),
 		)
 	}
 
 	status := ""
-	if m.status != "" {
-		status = "\n" + statusStyle.Render(m.status)
+	if m.isLoading {
+		status = m.spinner.View() + " " + m.status
+	} else if m.status != "" {
+		if m.isError {
+			status = errorStyle.Render(m.status)
+		} else {
+			status = statusStyle.Render(m.status)
+		}
 	}
 
-	return docStyle.Render(s + status)
+	footer := footerStyle.Width(m.width).Render(status)
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		docStyle.Render(content),
+		footer,
+	)
 }
 
 func (m model) helpView() string {
-	return statusStyle.Render("q/esc: back • arrows/j/k: scroll")
+	return footerStyle.Render("q/esc: back • arrows/j/k: scroll")
+}
+
+func (m model) clearStatusAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return clearStatusMsg{}
+	})
 }
 
 // --- Commands ---
@@ -486,11 +548,16 @@ func Run(client *api.Client) error {
 	ti.CharLimit = 250
 	ti.Width = 50
 
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	m := model{
 		list:       list.New(items, list.NewDefaultDelegate(), 0, 0),
 		folderList: list.New(nil, list.NewDefaultDelegate(), 0, 0),
 		viewport:   viewport.New(0, 0),
 		tagInput:   ti,
+		spinner:    s,
 		client:     client,
 		state:      stateBrowsing,
 	}
