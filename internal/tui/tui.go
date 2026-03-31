@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -17,6 +19,7 @@ import (
 
 var docStyle = lipgloss.NewStyle().Margin(1, 2)
 var statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Italic(true)
+var tagStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Italic(true)
 
 type listKeyMap struct {
 	archive key.Binding
@@ -26,15 +29,16 @@ type listKeyMap struct {
 	refresh key.Binding
 	open    key.Binding
 	read    key.Binding
+	tag     key.Binding
 }
 
 func (k listKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.read, k.archive, k.move}
+	return []key.Binding{k.read, k.archive, k.move, k.tag}
 }
 
 func (k listKeyMap) FullHelp() []key.Binding {
 	return []key.Binding{
-		k.read, k.open, k.archive, k.star, k.move, k.delete, k.refresh,
+		k.read, k.open, k.archive, k.star, k.move, k.tag, k.delete, k.refresh,
 	}
 }
 
@@ -67,6 +71,10 @@ var keys = listKeyMap{
 		key.WithKeys("r"),
 		key.WithHelp("r", "refresh"),
 	),
+	tag: key.NewBinding(
+		key.WithKeys("t"),
+		key.WithHelp("t", "tags"),
+	),
 }
 
 type item struct {
@@ -78,10 +86,14 @@ func (i item) Title() string {
 	if i.bookmark.Starred == "1" {
 		starred = " ★"
 	}
-	return i.bookmark.Title + starred
+	tags := ""
+	if i.bookmark.Tags != "" {
+		tags = " " + tagStyle.Render("["+i.bookmark.Tags+"]")
+	}
+	return i.bookmark.Title + starred + tags
 }
 func (i item) Description() string { return i.bookmark.URL }
-func (i item) FilterValue() string { return i.bookmark.Title }
+func (i item) FilterValue() string { return i.bookmark.Title + " " + i.bookmark.Tags }
 
 type state int
 
@@ -89,12 +101,14 @@ const (
 	stateBrowsing state = iota
 	stateMoving
 	stateReading
+	stateTagging
 )
 
 type model struct {
 	list         list.Model
 	folderList   list.Model
 	viewport     viewport.Model
+	tagInput     textinput.Model
 	client       *api.Client
 	state        state
 	status       string
@@ -135,6 +149,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.state == stateBrowsing {
 			switch {
+			case key.Matches(msg, keys.tag):
+				i, ok := m.list.SelectedItem().(item)
+				if ok {
+					m.selectedItem = &i
+					m.tagInput.SetValue(i.bookmark.Tags)
+					m.tagInput.Focus()
+					m.state = stateTagging
+					return m, nil
+				}
 			case key.Matches(msg, keys.open):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
@@ -187,6 +210,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateBrowsing
 				return m, nil
 			}
+		} else if m.state == stateTagging {
+			switch msg.String() {
+			case "enter":
+				if m.selectedItem != nil {
+					tagList := strings.Split(m.tagInput.Value(), ",")
+					var tags []string
+					for _, t := range tagList {
+						trimmed := strings.TrimSpace(t)
+						if trimmed != "" {
+							tags = append(tags, trimmed)
+						}
+					}
+					return m, m.setTags(m.selectedItem.bookmark.ID, tags)
+				}
+			case "esc":
+				m.state = stateBrowsing
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.tagInput, cmd = m.tagInput.Update(msg)
+			return m, cmd
 		}
 
 	case contentMsg:
@@ -255,6 +299,12 @@ func (m model) View() string {
 		s = m.folderList.View()
 	case stateReading:
 		s = m.viewport.View() + "\n" + m.helpView()
+	case stateTagging:
+		s = fmt.Sprintf(
+			"Tags for: %s\n\n%s\n\n(enter to save, esc to cancel)",
+			m.selectedItem.bookmark.Title,
+			m.tagInput.View(),
+		)
 	}
 
 	status := ""
@@ -362,6 +412,21 @@ func (m model) fetchFolders() tea.Cmd {
 	}
 }
 
+func (m model) setTags(bookmarkID int, tags []string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.SetTags(bookmarkID, tags)
+		if err != nil {
+			return errMsg(err)
+		}
+		bookmarks, _ := m.client.ListBookmarks("")
+		return tea.Batch(
+			func() tea.Msg { return statusMsg("Tags updated") },
+			func() tea.Msg { return bookmarksMsg(bookmarks) },
+			func() tea.Msg { return stateMsg(stateBrowsing) },
+		)()
+	}
+}
+
 func (m model) moveBookmark(bookmarkID, folderID int) tea.Cmd {
 	return func() tea.Msg {
 		err := m.client.MoveBookmark(bookmarkID, folderID)
@@ -413,10 +478,16 @@ func Run(client *api.Client) error {
 		items[i] = item{bookmark: b}
 	}
 
+	ti := textinput.New()
+	ti.Placeholder = "tag1, tag2, ..."
+	ti.CharLimit = 250
+	ti.Width = 50
+
 	m := model{
 		list:       list.New(items, list.NewDefaultDelegate(), 0, 0),
 		folderList: list.New(nil, list.NewDefaultDelegate(), 0, 0),
 		viewport:   viewport.New(0, 0),
+		tagInput:   ti,
 		client:     client,
 		state:      stateBrowsing,
 	}

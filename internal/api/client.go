@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/dghubble/oauth1"
 )
@@ -80,6 +81,7 @@ type Bookmark struct {
 	FolderID    int    `json:"folder_id"`
 	Time        int64  `json:"time"`
 	Starred     string `json:"starred"`
+	Tags        string `json:"tags"`
 }
 
 // AddBookmark adds a new bookmark.
@@ -321,4 +323,64 @@ func (c *Client) ListFolders() ([]Folder, error) {
 	}
 
 	return folders, nil
+}
+
+// AddTags adds tags to a bookmark.
+func (c *Client) AddTags(bookmarkID int, tags []string) error {
+	apiURL := BaseURL + "/bookmarks/add_tags"
+	data := url.Values{}
+	data.Set("bookmark_id", fmt.Sprintf("%d", bookmarkID))
+	data.Set("tags", strings.Join(tags, ","))
+
+	resp, err := c.HTTPClient.PostForm(apiURL, data)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to add tags: %s (status %d)", string(body), resp.StatusCode)
+	}
+	return nil
+}
+
+// RemoveTags removes tags from a bookmark.
+func (c *Client) RemoveTags(bookmarkID int, tags []string) error {
+	apiURL := BaseURL + "/bookmarks/remove_tags"
+	data := url.Values{}
+	data.Set("bookmark_id", fmt.Sprintf("%d", bookmarkID))
+	data.Set("tags", strings.Join(tags, ","))
+
+	resp, err := c.HTTPClient.PostForm(apiURL, data)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to remove tags: %s (status %d)", string(body), resp.StatusCode)
+	}
+	return nil
+}
+
+// SetTags sets the tags for a bookmark (overwrites existing tags).
+func (c *Client) SetTags(bookmarkID int, tags []string) error {
+	apiURL := BaseURL + "/bookmarks/set_tags"
+	data := url.Values{}
+	data.Set("bookmark_id", fmt.Sprintf("%d", bookmarkID))
+	data.Set("tags", strings.Join(tags, ","))
+
+	resp, err := c.HTTPClient.PostForm(apiURL, data)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to set tags: %s (status %d)", string(body), resp.StatusCode)
+	}
+	return nil
 }
