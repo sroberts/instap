@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -20,14 +21,114 @@ import (
 )
 
 var (
-	docStyle     = lipgloss.NewStyle().Margin(0, 2)
-	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Italic(true)
-	tagStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Italic(true)
-	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
-	headerStyle  = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Padding(0, 1).Bold(true)
-	footerStyle  = lipgloss.NewStyle().Background(lipgloss.Color("235")).Foreground(lipgloss.Color("243")).Padding(0, 1)
-	readerHeader = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Underline(true)
+	// Colors
+	primaryColor   = lipgloss.Color("#8aadf4") // Blue
+	secondaryColor = lipgloss.Color("#b7bdf8") // Lavender
+	starredColor   = lipgloss.Color("#eed49f") // Yellow
+	tagColor       = lipgloss.Color("#8bd5ca") // Teal
+	errorColor     = lipgloss.Color("#ed8796") // Red
+	surfaceColor   = lipgloss.Color("#363a4f") // Surface
+	overlayColor   = lipgloss.Color("#494d64") // Overlay
+	textColor      = lipgloss.Color("#cad3f5") // Text
+	subtextColor   = lipgloss.Color("#8087a2") // Subtext
+
+	// Styles
+	docStyle = lipgloss.NewStyle().Margin(0, 0)
+
+	headerStyle = lipgloss.NewStyle().
+			Background(primaryColor).
+			Foreground(lipgloss.Color("#24273a")).
+			Padding(0, 1).
+			Bold(true).
+			MarginBottom(1)
+
+	footerStyle = lipgloss.NewStyle().
+			Foreground(subtextColor).
+			Padding(0, 1).
+			Height(1)
+
+	statusStyle = lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Italic(true)
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(errorColor).
+			Bold(true)
+
+	selectedItemStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(primaryColor).
+				PaddingLeft(1).
+				Background(overlayColor)
+
+	normalItemStyle = lipgloss.NewStyle().
+			PaddingLeft(2)
+
+	titleStyle = lipgloss.NewStyle().
+			Foreground(textColor).
+			Bold(true)
+
+	selectedTitleStyle = lipgloss.NewStyle().
+				Foreground(primaryColor).
+				Bold(true)
+
+	urlStyle = lipgloss.NewStyle().
+			Foreground(subtextColor).
+			Italic(true)
+
+	tagStyle = lipgloss.NewStyle().
+			Foreground(tagColor).
+			Italic(true)
+
+	starredStyle = lipgloss.NewStyle().
+			Foreground(starredColor)
+
+	readerHeader = lipgloss.NewStyle().
+			Foreground(primaryColor).
+			Bold(true).
+			Underline(true).
+			MarginBottom(1)
 )
+
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int                               { return 2 }
+func (d itemDelegate) Spacing() int                              { return 1 }
+func (d itemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(item)
+	if !ok {
+		return
+	}
+
+	title := i.bookmark.Title
+	if title == "" {
+		title = "Untitled"
+	}
+
+	starred := ""
+	if i.bookmark.Starred == "1" {
+		starred = starredStyle.Render(" ★")
+	}
+
+	tags := ""
+	if i.bookmark.Tags != "" {
+		tags = " " + tagStyle.Render("["+i.bookmark.Tags+"]")
+	}
+
+	var str string
+	if index == m.Index() {
+		t := selectedTitleStyle.Render(title)
+		u := urlStyle.Render(i.bookmark.URL)
+		str = selectedItemStyle.Render(fmt.Sprintf("%s%s%s\n%s", t, starred, tags, u))
+	} else {
+		t := titleStyle.Render(title)
+		u := urlStyle.Render(i.bookmark.URL)
+		str = normalItemStyle.Render(fmt.Sprintf("%s%s%s\n%s", t, starred, tags, u))
+	}
+
+	fmt.Fprint(w, str)
+}
 
 type listKeyMap struct {
 	archive key.Binding
@@ -303,12 +404,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		
+		// Adjust for header (2 lines), footer (1 line), and borders (2 lines)
 		h, v := docStyle.GetFrameSize()
-		m.list.SetSize(msg.Width-h, msg.Height-v-4)
-		m.folderList.SetSize(msg.Width-h, msg.Height-v-4)
-		m.viewport.Width = msg.Width - h
-		m.viewport.Height = msg.Height - v - 4
-		m.tagInput.Width = msg.Width - h - 10
+		contentWidth := msg.Width - h - 4 // minus horizontal borders and padding
+		contentHeight := msg.Height - v - 6 // minus header, footer, and vertical borders
+
+		m.list.SetSize(contentWidth, contentHeight)
+		m.folderList.SetSize(contentWidth, contentHeight)
+		m.viewport.Width = contentWidth
+		m.viewport.Height = contentHeight - 2 // minus internal reading titles/help
+		m.tagInput.Width = contentWidth - 10
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -331,6 +437,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	header := headerStyle.Render(" INSTAPAPER ")
+	
+	// Create a window effect for the content
+	windowStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(overlayColor).
+		Padding(0, 1).
+		Width(m.width - 2).
+		Height(m.height - 5)
+
 	var content string
 	switch m.state {
 	case stateBrowsing:
@@ -340,7 +455,7 @@ func (m model) View() string {
 	case stateReading:
 		title := ""
 		if m.selectedItem != nil {
-			title = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n\n"
+			title = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
 		}
 		content = title + m.viewport.View() + "\n" + m.helpView()
 	case stateTagging:
@@ -362,11 +477,19 @@ func (m model) View() string {
 		}
 	}
 
-	footer := footerStyle.Width(m.width).Render(status)
+	// Sectioned footer
+	info := fmt.Sprintf("%d/%d", m.list.Index()+1, len(m.list.Items()))
+	if m.state == stateReading {
+		info = fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
+	}
+	
+	footerInfo := footerStyle.Render(info)
+	footerStatus := footerStyle.Copy().Width(m.width - lipgloss.Width(footerInfo) - 2).Render(status)
+	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		docStyle.Render(content),
+		docStyle.Render(windowStyle.Render(content)),
 		footer,
 	)
 }
@@ -550,21 +673,28 @@ func Run(client *api.Client) error {
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	s.Style = lipgloss.NewStyle().Foreground(primaryColor)
+
+	l := list.New(items, itemDelegate{}, 0, 0)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.Styles.PaginationStyle = footerStyle
+	l.Styles.HelpStyle = footerStyle
+
+	fl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	fl.SetShowTitle(false)
+	fl.SetShowStatusBar(false)
 
 	m := model{
-		list:       list.New(items, list.NewDefaultDelegate(), 0, 0),
-		folderList: list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		list:       l,
+		folderList: fl,
 		viewport:   viewport.New(0, 0),
 		tagInput:   ti,
 		spinner:    s,
 		client:     client,
 		state:      stateBrowsing,
 	}
-	m.list.Title = "Instapaper Bookmarks"
-	m.list.AdditionalShortHelpKeys = keys.ShortHelp
-	m.list.AdditionalFullHelpKeys = keys.FullHelp
-	m.folderList.Title = "Select Folder"
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
