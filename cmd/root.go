@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -17,8 +19,16 @@ var RootCmd = &cobra.Command{
 	Use:   "instap",
 	Short: "A command-line tool for Instapaper",
 	Long: `instap is a CLI tool for interacting with the Instapaper API.
-It allows you to save bookmarks, list them, and manage them via an interactive TUI.`,
+It allows you to save bookmarks, list them, and manage them via an interactive TUI.
+Piping data (URLs and optional tags) into instap will automatically save them.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Check for piped input
+		fi, _ := os.Stdin.Stat()
+		if (fi.Mode() & os.ModeCharDevice) == 0 {
+			saveFromStdin()
+			return
+		}
+
 		if len(args) == 0 {
 			consumerKey := viper.GetString("consumer_key")
 			consumerSecret := viper.GetString("consumer_secret")
@@ -37,6 +47,50 @@ It allows you to save bookmarks, list them, and manage them via an interactive T
 			}
 		}
 	},
+}
+
+func saveFromStdin() {
+	consumerKey := viper.GetString("consumer_key")
+	consumerSecret := viper.GetString("consumer_secret")
+	accessToken := viper.GetString("access_token")
+	accessSecret := viper.GetString("access_token_secret")
+
+	if consumerKey == "" || consumerSecret == "" || accessToken == "" || accessSecret == "" {
+		fmt.Println("Please log in first using 'instap auth login'")
+		return
+	}
+
+	client := api.NewClient(consumerKey, consumerSecret, accessToken, accessSecret)
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		url := parts[0]
+		var tags []string
+		if len(parts) > 1 {
+			tags = strings.Split(parts[1], ",")
+		}
+
+		bookmark, err := client.AddBookmark(url)
+		if err != nil {
+			fmt.Printf("Error saving %s: %v\n", url, err)
+			continue
+		}
+
+		if len(tags) > 0 {
+			err = client.SetTags(bookmark.ID, tags)
+			if err != nil {
+				fmt.Printf("Error tagging %s: %v\n", url, err)
+			}
+		}
+
+		fmt.Printf("Saved: %s\n", bookmark.Title)
+	}
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
