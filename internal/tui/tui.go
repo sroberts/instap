@@ -405,15 +405,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		
-		// Adjust for header (2 lines), footer (1 line), and borders (2 lines)
-		h, v := docStyle.GetFrameSize()
-		contentWidth := msg.Width - h - 4 // minus horizontal borders and padding
-		contentHeight := msg.Height - v - 6 // minus header, footer, and vertical borders
+		// Header (2) + Footer (1) + Window Borders (2) = 5 lines of chrome
+		contentWidth := msg.Width - 4 // minus borders and padding
+		contentHeight := msg.Height - 5 // minus header, footer, and borders
+
+		if contentHeight < 0 {
+			contentHeight = 0
+		}
 
 		m.list.SetSize(contentWidth, contentHeight)
 		m.folderList.SetSize(contentWidth, contentHeight)
 		m.viewport.Width = contentWidth
-		m.viewport.Height = contentHeight - 2 // minus internal reading titles/help
+		m.viewport.Height = contentHeight - 3 // minus internal reading titles/help
 		m.tagInput.Width = contentWidth - 10
 
 	case spinner.TickMsg:
@@ -436,15 +439,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
+	if m.width == 0 || m.height == 0 {
+		return "Initializing..."
+	}
+
 	header := headerStyle.Render(" INSTAPAPER ")
 	
-	// Create a window effect for the content
+	// Recalculate inner dimensions
+	// Header: 1 line + 1 margin = 2 lines
+	// Footer: 1 line
+	// Available for window: m.height - 3
+	windowHeight := m.height - 3
+	if windowHeight < 0 {
+		windowHeight = 0
+	}
+
 	windowStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(overlayColor).
 		Padding(0, 1).
-		Width(m.width - 2).
-		Height(m.height - 5)
+		Width(m.width).
+		Height(windowHeight)
 
 	var content string
 	switch m.state {
@@ -457,6 +472,7 @@ func (m model) View() string {
 		if m.selectedItem != nil {
 			title = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
 		}
+		// The viewport height is already constrained in Update
 		content = title + m.viewport.View() + "\n" + m.helpView()
 	case stateTagging:
 		content = fmt.Sprintf(
@@ -478,18 +494,18 @@ func (m model) View() string {
 	}
 
 	// Sectioned footer
-	info := fmt.Sprintf("%d/%d", m.list.Index()+1, len(m.list.Items()))
+	info := fmt.Sprintf(" %d/%d ", m.list.Index()+1, len(m.list.Items()))
 	if m.state == stateReading {
-		info = fmt.Sprintf("%d%%", int(m.viewport.ScrollPercent()*100))
+		info = fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100))
 	}
 	
-	footerInfo := footerStyle.Render(info)
-	footerStatus := footerStyle.Copy().Width(m.width - lipgloss.Width(footerInfo) - 2).Render(status)
+	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
+	footerStatus := footerStyle.Copy().Width(m.width - lipgloss.Width(footerInfo)).Render(status)
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		docStyle.Render(windowStyle.Render(content)),
+		windowStyle.Render(content),
 		footer,
 	)
 }
@@ -678,6 +694,7 @@ func Run(client *api.Client) error {
 	l := list.New(items, itemDelegate{}, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
 	l.SetFilteringEnabled(true)
 	l.Styles.PaginationStyle = footerStyle
 	l.Styles.HelpStyle = footerStyle
@@ -685,6 +702,7 @@ func Run(client *api.Client) error {
 	fl := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	fl.SetShowTitle(false)
 	fl.SetShowStatusBar(false)
+	fl.SetShowHelp(false)
 
 	m := model{
 		list:       l,
