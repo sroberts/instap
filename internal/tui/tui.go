@@ -211,11 +211,11 @@ const (
 	stateTagging
 )
 
-const asciiLogo = ` ___           _             
-|_ _|_ __  ___| |_ __ _ _ __  
- | || '_ \(_-<|  _/ _' | '_ \ 
-|___|_| |_/__/ \__\__,_| .__/ 
-                       |_|    `
+const asciiLogo = ` ___           _
+|_ _|_ __  ___| |_ __ _ _ __
+ | || '_ \(_-<|  _/ _' | '_ \
+|___|_| |_/__/ \__\__,_| .__/
+                       |_|`
 
 type stats struct {
 	total   int
@@ -426,25 +426,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		
-		// Exact content area calculation
-		// Borders (2) + Padding (2) = 4 horizontal
-		// Header (6) + Borders (2) + Footer (1) = 9 vertical
-		contentWidth := msg.Width - 4
-		contentHeight := msg.Height - 9
-
-		if contentHeight < 0 {
-			contentHeight = 0
-		}
-		if contentWidth < 0 {
-			contentWidth = 0
-		}
-
-		m.list.SetSize(contentWidth, contentHeight)
-		m.folderList.SetSize(contentWidth, contentHeight)
-		m.viewport.Width = contentWidth
-		m.viewport.Height = contentHeight - 3
-		m.tagInput.Width = contentWidth - 4
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -471,11 +452,38 @@ func (m model) View() string {
 	}
 
 	header := m.headerView()
+	headerHeight := lipgloss.Height(header)
 	
-	// Subtract 9 from height for Header (6), Footer (1), and Borders (2)
-	windowHeight := m.height - 9
-	if windowHeight < 0 {
-		windowHeight = 0
+	// Calculate footer first
+	info := fmt.Sprintf(" %d/%d ", m.list.Index()+1, len(m.list.Items()))
+	if m.state == stateReading {
+		info = fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100))
+	}
+	
+	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
+	statusWidth := m.width - lipgloss.Width(footerInfo)
+	if statusWidth < 0 {
+		statusWidth = 0
+	}
+	
+	statusText := ""
+	if m.isLoading {
+		statusText = m.spinner.View() + " " + m.status
+	} else if m.status != "" {
+		if m.isError {
+			statusText = errorStyle.Render(m.status)
+		} else {
+			statusText = statusStyle.Render(m.status)
+		}
+	}
+	footerStatus := footerStyle.Copy().Width(statusWidth).Render(statusText)
+	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
+	footerHeight := lipgloss.Height(footer)
+
+	// Available space for the window
+	windowHeight := m.height - headerHeight - footerHeight
+	if windowHeight < 4 {
+		windowHeight = 4
 	}
 
 	windowStyle := lipgloss.NewStyle().
@@ -488,14 +496,18 @@ func (m model) View() string {
 	var content string
 	switch m.state {
 	case stateBrowsing:
+		m.list.SetSize(m.width-4, windowHeight-4) 
 		content = m.list.View()
 	case stateMoving:
+		m.folderList.SetSize(m.width-4, windowHeight-4)
 		content = m.folderList.View()
 	case stateReading:
 		rh := ""
 		if m.selectedItem != nil {
 			rh = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
 		}
+		m.viewport.Width = m.width - 4
+		m.viewport.Height = windowHeight - 5
 		content = rh + m.viewport.View()
 	case stateTagging:
 		content = fmt.Sprintf(
@@ -505,35 +517,10 @@ func (m model) View() string {
 		)
 	}
 
-	// Add help view to content if not tagging or moving
+	// Add help view if not tagging
 	if m.state != stateTagging && m.state != stateMoving {
 		content += "\n" + m.helpView()
 	}
-
-	status := ""
-	if m.isLoading {
-		status = m.spinner.View() + " " + m.status
-	} else if m.status != "" {
-		if m.isError {
-			status = errorStyle.Render(m.status)
-		} else {
-			status = statusStyle.Render(m.status)
-		}
-	}
-
-	// Sectioned footer
-	info := fmt.Sprintf(" %d/%d ", m.list.Index()+1, len(m.list.Items()))
-	if m.state == stateReading {
-		info = fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100))
-	}
-	
-	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
-	statusWidth := m.width - lipgloss.Width(footerInfo)
-	if statusWidth < 0 {
-		statusWidth = 0
-	}
-	footerStatus := footerStyle.Copy().Width(statusWidth).Render(status)
-	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -546,6 +533,7 @@ func (m model) headerView() string {
 	logo := lipgloss.NewStyle().
 		Foreground(primaryColor).
 		Bold(true).
+		PaddingTop(1). // Ensure first line isn't cut off
 		Render(asciiLogo)
 
 	statsStyle := lipgloss.NewStyle().
@@ -562,8 +550,6 @@ func (m model) headerView() string {
 	)
 
 	statsBox := statsStyle.Render(statsContent)
-
-	// Gap between logo and stats
 	gap := lipgloss.NewStyle().Width(4).Render("")
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, logo, gap, statsBox)
