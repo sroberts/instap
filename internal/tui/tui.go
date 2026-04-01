@@ -39,13 +39,11 @@ var (
 			Background(primaryColor).
 			Foreground(lipgloss.Color("#24273a")).
 			Padding(0, 1).
-			Bold(true).
-			MarginBottom(1)
+			Bold(true)
 
 	footerStyle = lipgloss.NewStyle().
 			Foreground(subtextColor).
-			Padding(0, 1).
-			Height(1)
+			Padding(0, 1)
 
 	statusStyle = lipgloss.NewStyle().
 			Foreground(secondaryColor).
@@ -448,7 +446,9 @@ func (m model) View() string {
 		return "Initializing..."
 	}
 
-	header := headerStyle.Render(" INSTAPAPER ")
+	// Title Bar
+	title := " INSTAPAPER "
+	titleBar := headerStyle.Width(m.width).Render(title)
 	
 	// Subtract 4 from height for Header (1), Footer (1), and Borders (2)
 	windowHeight := m.height - 4
@@ -460,7 +460,7 @@ func (m model) View() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(overlayColor).
 		Padding(0, 1).
-		Width(m.width - 2). // Border adds 2 to total width
+		Width(m.width - 2). 
 		Height(windowHeight)
 
 	var content string
@@ -470,17 +470,22 @@ func (m model) View() string {
 	case stateMoving:
 		content = m.folderList.View()
 	case stateReading:
-		title := ""
+		rh := ""
 		if m.selectedItem != nil {
-			title = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
+			rh = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
 		}
-		content = title + m.viewport.View() + "\n" + m.helpView()
+		content = rh + m.viewport.View()
 	case stateTagging:
 		content = fmt.Sprintf(
 			"\n  Tags for: %s\n\n  %s\n\n  (enter to save, esc to cancel)",
 			m.selectedItem.bookmark.Title,
 			m.tagInput.View(),
 		)
+	}
+
+	// Add help view to content if not tagging or moving
+	if m.state != stateTagging && m.state != stateMoving {
+		content += "\n" + m.helpView()
 	}
 
 	status := ""
@@ -501,7 +506,6 @@ func (m model) View() string {
 	}
 	
 	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
-	// Width of footer status should be total width minus info width
 	statusWidth := m.width - lipgloss.Width(footerInfo)
 	if statusWidth < 0 {
 		statusWidth = 0
@@ -510,14 +514,32 @@ func (m model) View() string {
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
+		titleBar,
 		windowStyle.Render(content),
 		footer,
 	)
 }
 
 func (m model) helpView() string {
-	return footerStyle.Render("q/esc: back • arrows/j/k: scroll")
+	var shortcuts string
+	switch m.state {
+	case stateBrowsing:
+		shortcuts = "enter:read • o:open • a:arch • s:star • m:move • t:tags • d:del • r:refresh"
+	case stateReading:
+		shortcuts = "q/esc:back • arrows/j/k:scroll"
+	default:
+		return ""
+	}
+	// Center the shortcuts in the available width
+	style := lipgloss.NewStyle().
+		Background(overlayColor).
+		Foreground(secondaryColor).
+		Padding(0, 1).
+		Bold(true).
+		Width(m.width - 4).
+		Align(lipgloss.Center)
+	
+	return style.Render(shortcuts)
 }
 
 func (m model) clearStatusAfter(d time.Duration) tea.Cmd {
