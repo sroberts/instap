@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	// Colors
+	// Colors (Catppuccin Macchiato inspired)
 	primaryColor   = lipgloss.Color("#8aadf4") // Blue
 	secondaryColor = lipgloss.Color("#b7bdf8") // Lavender
 	starredColor   = lipgloss.Color("#eed49f") // Yellow
@@ -33,8 +33,6 @@ var (
 	subtextColor   = lipgloss.Color("#8087a2") // Subtext
 
 	// Styles
-	docStyle = lipgloss.NewStyle().Margin(0, 0)
-
 	headerStyle = lipgloss.NewStyle().
 			Background(primaryColor).
 			Foreground(lipgloss.Color("#24273a")).
@@ -81,12 +79,18 @@ var (
 	starredStyle = lipgloss.NewStyle().
 			Foreground(starredColor)
 
-	readerHeader = lipgloss.NewStyle().
-			Foreground(primaryColor).
-			Bold(true).
-			Underline(true).
-			MarginBottom(1)
+	readerHeaderStyle = lipgloss.NewStyle().
+				Foreground(primaryColor).
+				Bold(true).
+				Underline(true).
+				MarginBottom(1)
 )
+
+const asciiLogo = `  ___           _
+ |_ _|_ __  ___| |_ __ _ _ __
+  | || '_ \(_-<|  _/ _' | '_ \
+ |___|_| |_/__/ \__\__,_| .__/
+                        |_|`
 
 type itemDelegate struct{}
 
@@ -188,17 +192,7 @@ type item struct {
 	bookmark api.Bookmark
 }
 
-func (i item) Title() string {
-	starred := ""
-	if i.bookmark.Starred == "1" {
-		starred = " ★"
-	}
-	tags := ""
-	if i.bookmark.Tags != "" {
-		tags = " " + tagStyle.Render("["+i.bookmark.Tags+"]")
-	}
-	return i.bookmark.Title + starred + tags
-}
+func (i item) Title() string { return i.bookmark.Title }
 func (i item) Description() string { return i.bookmark.URL }
 func (i item) FilterValue() string { return i.bookmark.Title + " " + i.bookmark.Tags }
 
@@ -210,13 +204,6 @@ const (
 	stateReading
 	stateTagging
 )
-
-const asciiLogo = `
-  ___           _             
- |_ _|_ __  ___| |_ __ _ _ __  
-  | || '_ \(_-<|  _/ _' | '_ \ 
- |___|_| |_/__/ \__\__,_| .__/ 
-                        |_|    `
 
 type stats struct {
 	total   int
@@ -245,14 +232,17 @@ type statusMsg string
 type clearStatusMsg struct{}
 type errMsg error
 type bookmarksMsg []api.Bookmark
-type foldersMsg []api.Folder
+type foldersMsg struct {
+	folders []api.Folder
+	switchState bool
+}
 type contentMsg string
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		m.fetchBookmarks(),
-		m.fetchFolders(),
+		m.fetchFolders(false),
 	)
 }
 
@@ -322,6 +312,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, keys.read):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
+					m.selectedItem = &i
 					m.status = "Fetching content..."
 					m.isLoading = true
 					return m, tea.Batch(m.fetchAndRender(i.bookmark), m.spinner.Tick)
@@ -354,7 +345,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedItem = &i
 					m.status = "Fetching folders..."
 					m.isLoading = true
-					return m, tea.Batch(m.fetchFolders(), m.spinner.Tick)
+					return m, tea.Batch(m.fetchFolders(true), m.spinner.Tick)
 				}
 			case msg.String() == "q":
 				return m, tea.Quit
@@ -411,22 +402,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats.starred = starredCount
 		m.list.SetItems(items)
 		m.isLoading = false
-		// Clear "Fetching data..." status if it was set
 		if m.status == "Fetching data..." {
 			m.status = ""
 		}
 		return m, nil
 
 	case foldersMsg:
-		items := make([]list.Item, len(msg))
-		for i, f := range msg {
+		items := make([]list.Item, len(msg.folders))
+		for i, f := range msg.folders {
 			items[i] = folderItem{folder: f}
 		}
-		m.stats.folders = len(msg)
+		m.stats.folders = len(msg.folders)
 		m.folderList.SetItems(items)
-		// DON'T switch to stateMoving here! Only do it when 'm' is pressed.
-		// If we are currently in stateBrowsing and just refreshing, keep it that way.
 		m.isLoading = false
+		if msg.switchState {
+			m.state = stateMoving
+			m.status = "Select folder"
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -460,17 +452,11 @@ func (m model) View() string {
 	header := m.headerView()
 	headerHeight := lipgloss.Height(header)
 	
-	// Calculate footer first
 	info := fmt.Sprintf(" %d/%d ", m.list.Index()+1, len(m.list.Items()))
 	if m.state == stateReading {
 		info = fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100))
 	}
-	
 	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
-	statusWidth := m.width - lipgloss.Width(footerInfo)
-	if statusWidth < 0 {
-		statusWidth = 0
-	}
 	
 	statusText := ""
 	if m.isLoading {
@@ -482,13 +468,13 @@ func (m model) View() string {
 			statusText = statusStyle.Render(m.status)
 		}
 	}
-	footerStatus := footerStyle.Copy().Width(statusWidth).Render(statusText)
+	footerStatus := footerStyle.Copy().Width(m.width - lipgloss.Width(footerInfo)).Render(statusText)
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 	footerHeight := lipgloss.Height(footer)
 
-	// Available space for the window: total height - header - footer
-	// We'll be generous with header subtraction to avoid clipping
-	windowHeight := m.height - headerHeight - footerHeight
+	// Final vertical alignment: Spacer + Header + Window + Footer
+	// We use 1 line for top spacer
+	windowHeight := m.height - headerHeight - footerHeight - 1
 	if windowHeight < 4 {
 		windowHeight = 4
 	}
@@ -511,7 +497,7 @@ func (m model) View() string {
 	case stateReading:
 		rh := ""
 		if m.selectedItem != nil {
-			rh = readerHeader.Render(m.selectedItem.bookmark.Title) + "\n"
+			rh = readerHeaderStyle.Render(m.selectedItem.bookmark.Title) + "\n"
 		}
 		m.viewport.Width = m.width - 4
 		m.viewport.Height = windowHeight - 5
@@ -524,12 +510,12 @@ func (m model) View() string {
 		)
 	}
 
-	// Add help view if not tagging
 	if m.state != stateTagging && m.state != stateMoving {
 		content += "\n" + m.helpView()
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
+		"\n", // Top Spacer
 		header,
 		windowStyle.Render(content),
 		footer,
@@ -558,11 +544,8 @@ func (m model) headerView() string {
 	statsBox := statsStyle.Render(statsContent)
 	gap := lipgloss.NewStyle().Width(4).Render("")
 
-	// Join logo and stats box
 	header := lipgloss.JoinHorizontal(lipgloss.Top, logo, gap, statsBox)
-	
-	// Add a top margin to the entire header to prevent clipping by the terminal edge
-	return lipgloss.NewStyle().MarginTop(1).Render(header)
+	return lipgloss.NewStyle().PaddingLeft(2).Render(header)
 }
 
 func (m model) helpView() string {
@@ -575,7 +558,6 @@ func (m model) helpView() string {
 	default:
 		return ""
 	}
-	// Center the shortcuts in the available width
 	style := lipgloss.NewStyle().
 		Background(overlayColor).
 		Foreground(secondaryColor).
@@ -601,29 +583,14 @@ func (m model) fetchAndRender(b api.Bookmark) tea.Cmd {
 		if err != nil {
 			return errMsg(err)
 		}
-
 		converter := md.NewConverter("", true, nil)
 		markdown, err := converter.ConvertString(html)
 		if err != nil {
 			return errMsg(err)
 		}
-
-		// Prepend title and URL
 		markdown = fmt.Sprintf("# %s\n\n%s\n\n---\n\n%s", b.Title, b.URL, markdown)
-
-		r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(m.viewport.Width),
-		)
-		if err != nil {
-			return errMsg(err)
-		}
-
-		out, err := r.Render(markdown)
-		if err != nil {
-			return errMsg(err)
-		}
-
+		r, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(m.viewport.Width))
+		out, _ := r.Render(markdown)
 		return contentMsg(out)
 	}
 }
@@ -640,8 +607,7 @@ func (m model) fetchBookmarks() tea.Cmd {
 
 func (m model) archiveBookmark(id int) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.ArchiveBookmark(id)
-		if err != nil {
+		if err := m.client.ArchiveBookmark(id); err != nil {
 			return errMsg(err)
 		}
 		bookmarks, _ := m.client.ListBookmarks("")
@@ -651,8 +617,7 @@ func (m model) archiveBookmark(id int) tea.Cmd {
 
 func (m model) deleteBookmark(id int) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.DeleteBookmark(id)
-		if err != nil {
+		if err := m.client.DeleteBookmark(id); err != nil {
 			return errMsg(err)
 		}
 		bookmarks, _ := m.client.ListBookmarks("")
@@ -676,20 +641,19 @@ func (m model) toggleStar(b api.Bookmark) tea.Cmd {
 	}
 }
 
-func (m model) fetchFolders() tea.Cmd {
+func (m model) fetchFolders(switchState bool) tea.Cmd {
 	return func() tea.Msg {
 		folders, err := m.client.ListFolders()
 		if err != nil {
 			return errMsg(err)
 		}
-		return foldersMsg(folders)
+		return foldersMsg{folders: folders, switchState: switchState}
 	}
 }
 
 func (m model) setTags(bookmarkID int, tags []string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.SetTags(bookmarkID, tags)
-		if err != nil {
+		if err := m.client.SetTags(bookmarkID, tags); err != nil {
 			return errMsg(err)
 		}
 		bookmarks, _ := m.client.ListBookmarks("")
@@ -703,8 +667,7 @@ func (m model) setTags(bookmarkID int, tags []string) tea.Cmd {
 
 func (m model) moveBookmark(bookmarkID, folderID int) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.MoveBookmark(bookmarkID, folderID)
-		if err != nil {
+		if err := m.client.MoveBookmark(bookmarkID, folderID); err != nil {
 			return errMsg(err)
 		}
 		bookmarks, _ := m.client.ListBookmarks("")
@@ -738,8 +701,6 @@ func openBrowser(u string) {
 		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", u).Start()
 	case "darwin":
 		err = exec.Command("open", u).Start()
-	default:
-		err = fmt.Errorf("unsupported platform")
 	}
 	_ = err
 }
