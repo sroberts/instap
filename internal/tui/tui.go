@@ -451,13 +451,13 @@ func (m model) View() string {
 
 	header := m.headerView()
 	headerHeight := lipgloss.Height(header)
-	
+
 	info := fmt.Sprintf(" %d/%d ", m.list.Index()+1, len(m.list.Items()))
 	if m.state == stateReading {
 		info = fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100))
 	}
-	footerInfo := footerStyle.Copy().Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
-	
+	footerInfo := footerStyle.Background(primaryColor).Foreground(lipgloss.Color("#24273a")).Bold(true).Render(info)
+
 	statusText := ""
 	if m.isLoading {
 		statusText = m.spinner.View() + " " + m.status
@@ -468,13 +468,12 @@ func (m model) View() string {
 			statusText = statusStyle.Render(m.status)
 		}
 	}
-	footerStatus := footerStyle.Copy().Width(m.width - lipgloss.Width(footerInfo)).Render(statusText)
+	footerStatus := footerStyle.Width(m.width - lipgloss.Width(footerInfo)).Render(statusText)
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 	footerHeight := lipgloss.Height(footer)
 
-	// Final vertical alignment: Spacer + Header + Window + Footer
-	// We use 1 line for top spacer
-	windowHeight := m.height - headerHeight - footerHeight - 1
+	// Layout: header + window border(2) + windowHeight(inner) + footer = m.height
+	windowHeight := m.height - headerHeight - footerHeight - 2
 	if windowHeight < 4 {
 		windowHeight = 4
 	}
@@ -483,24 +482,37 @@ func (m model) View() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(overlayColor).
 		Padding(0, 1).
-		Width(m.width - 2). 
+		Width(m.width - 2).
 		Height(windowHeight)
+
+	// Measure help bar so we can subtract it from content area precisely
+	helpStr := ""
+	helpHeight := 0
+	if m.state != stateTagging && m.state != stateMoving {
+		helpStr = "\n" + m.helpView()
+		helpHeight = lipgloss.Height(helpStr)
+	}
+
+	// Inner content width: window width - border(2) - horizontal padding(2)
+	innerWidth := m.width - 4
 
 	var content string
 	switch m.state {
 	case stateBrowsing:
-		m.list.SetSize(m.width-4, windowHeight-4) 
+		m.list.SetSize(innerWidth, windowHeight-helpHeight)
 		content = m.list.View()
 	case stateMoving:
-		m.folderList.SetSize(m.width-4, windowHeight-4)
+		m.folderList.SetSize(innerWidth, windowHeight)
 		content = m.folderList.View()
 	case stateReading:
 		rh := ""
+		rhHeight := 0
 		if m.selectedItem != nil {
 			rh = readerHeaderStyle.Render(m.selectedItem.bookmark.Title) + "\n"
+			rhHeight = lipgloss.Height(rh)
 		}
-		m.viewport.Width = m.width - 4
-		m.viewport.Height = windowHeight - 5
+		m.viewport.Width = innerWidth
+		m.viewport.Height = windowHeight - helpHeight - rhHeight
 		content = rh + m.viewport.View()
 	case stateTagging:
 		content = fmt.Sprintf(
@@ -510,12 +522,9 @@ func (m model) View() string {
 		)
 	}
 
-	if m.state != stateTagging && m.state != stateMoving {
-		content += "\n" + m.helpView()
-	}
+	content += helpStr
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		"\n", // Top Spacer
 		header,
 		windowStyle.Render(content),
 		footer,
@@ -531,8 +540,7 @@ func (m model) headerView() string {
 	statsStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(overlayColor).
-		Padding(0, 1).
-		Height(5)
+		Padding(0, 1)
 
 	statsContent := fmt.Sprintf(
 		"Total:   %d\nStarred: %d\nFolders: %d",
