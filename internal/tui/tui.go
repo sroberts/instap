@@ -211,11 +211,12 @@ const (
 	stateTagging
 )
 
-const asciiLogo = ` ___           _
-|_ _|_ __  ___| |_ __ _ _ __
- | || '_ \(_-<|  _/ _' | '_ \
-|___|_| |_/__/ \__\__,_| .__/
-                       |_|`
+const asciiLogo = `
+  ___           _             
+ |_ _|_ __  ___| |_ __ _ _ __  
+  | || '_ \(_-<|  _/ _' | '_ \ 
+ |___|_| |_/__/ \__\__,_| .__/ 
+                        |_|    `
 
 type stats struct {
 	total   int
@@ -321,7 +322,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, keys.read):
 				i, ok := m.list.SelectedItem().(item)
 				if ok {
-					m.selectedItem = &i
 					m.status = "Fetching content..."
 					m.isLoading = true
 					return m, tea.Batch(m.fetchAndRender(i.bookmark), m.spinner.Tick)
@@ -384,6 +384,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.status = string(msg)
 		m.isError = false
+		m.isLoading = false
 		return m, m.clearStatusAfter(3 * time.Second)
 
 	case clearStatusMsg:
@@ -410,6 +411,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats.starred = starredCount
 		m.list.SetItems(items)
 		m.isLoading = false
+		// Clear "Fetching data..." status if it was set
+		if m.status == "Fetching data..." {
+			m.status = ""
+		}
 		return m, nil
 
 	case foldersMsg:
@@ -419,7 +424,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stats.folders = len(msg)
 		m.folderList.SetItems(items)
-		m.state = stateMoving
+		// DON'T switch to stateMoving here! Only do it when 'm' is pressed.
+		// If we are currently in stateBrowsing and just refreshing, keep it that way.
 		m.isLoading = false
 		return m, nil
 
@@ -480,7 +486,8 @@ func (m model) View() string {
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 	footerHeight := lipgloss.Height(footer)
 
-	// Available space for the window
+	// Available space for the window: total height - header - footer
+	// We'll be generous with header subtraction to avoid clipping
 	windowHeight := m.height - headerHeight - footerHeight
 	if windowHeight < 4 {
 		windowHeight = 4
@@ -533,7 +540,6 @@ func (m model) headerView() string {
 	logo := lipgloss.NewStyle().
 		Foreground(primaryColor).
 		Bold(true).
-		PaddingTop(1). // Ensure first line isn't cut off
 		Render(asciiLogo)
 
 	statsStyle := lipgloss.NewStyle().
@@ -552,7 +558,11 @@ func (m model) headerView() string {
 	statsBox := statsStyle.Render(statsContent)
 	gap := lipgloss.NewStyle().Width(4).Render("")
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, logo, gap, statsBox)
+	// Join logo and stats box
+	header := lipgloss.JoinHorizontal(lipgloss.Top, logo, gap, statsBox)
+	
+	// Add a top margin to the entire header to prevent clipping by the terminal edge
+	return lipgloss.NewStyle().MarginTop(1).Render(header)
 }
 
 func (m model) helpView() string {
