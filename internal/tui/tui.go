@@ -211,6 +211,18 @@ const (
 	stateTagging
 )
 
+const asciiLogo = ` ___           _             
+|_ _|_ __  ___| |_ __ _ _ __  
+ | || '_ \(_-<|  _/ _' | '_ \ 
+|___|_| |_/__/ \__\__,_| .__/ 
+                       |_|    `
+
+type stats struct {
+	total   int
+	starred int
+	folders int
+}
+
 type model struct {
 	list         list.Model
 	folderList   list.Model
@@ -218,6 +230,7 @@ type model struct {
 	tagInput     textinput.Model
 	spinner      spinner.Model
 	client       *api.Client
+	stats        stats
 	state        state
 	status       string
 	isError      bool
@@ -235,7 +248,11 @@ type foldersMsg []api.Folder
 type contentMsg string
 
 func (m model) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(
+		m.spinner.Tick,
+		m.fetchBookmarks(),
+		m.fetchFolders(),
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -382,9 +399,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bookmarksMsg:
 		items := make([]list.Item, len(msg))
+		starredCount := 0
 		for i, b := range msg {
 			items[i] = item{bookmark: b}
+			if b.Starred == "1" {
+				starredCount++
+			}
 		}
+		m.stats.total = len(msg)
+		m.stats.starred = starredCount
 		m.list.SetItems(items)
 		m.isLoading = false
 		return m, nil
@@ -394,6 +417,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, f := range msg {
 			items[i] = folderItem{folder: f}
 		}
+		m.stats.folders = len(msg)
 		m.folderList.SetItems(items)
 		m.state = stateMoving
 		m.isLoading = false
@@ -405,9 +429,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 		// Exact content area calculation
 		// Borders (2) + Padding (2) = 4 horizontal
-		// Header (1) + Borders (2) + Footer (1) = 4 vertical
+		// Header (6) + Borders (2) + Footer (1) = 9 vertical
 		contentWidth := msg.Width - 4
-		contentHeight := msg.Height - 4
+		contentHeight := msg.Height - 9
 
 		if contentHeight < 0 {
 			contentHeight = 0
@@ -446,12 +470,10 @@ func (m model) View() string {
 		return "Initializing..."
 	}
 
-	// Title Bar
-	title := " INSTAPAPER "
-	titleBar := headerStyle.Width(m.width).Render(title)
+	header := m.headerView()
 	
-	// Subtract 4 from height for Header (1), Footer (1), and Borders (2)
-	windowHeight := m.height - 4
+	// Subtract 9 from height for Header (6), Footer (1), and Borders (2)
+	windowHeight := m.height - 9
 	if windowHeight < 0 {
 		windowHeight = 0
 	}
@@ -514,10 +536,37 @@ func (m model) View() string {
 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, footerStatus, footerInfo)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		titleBar,
+		header,
 		windowStyle.Render(content),
 		footer,
 	)
+}
+
+func (m model) headerView() string {
+	logo := lipgloss.NewStyle().
+		Foreground(primaryColor).
+		Bold(true).
+		Render(asciiLogo)
+
+	statsStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(overlayColor).
+		Padding(0, 1).
+		Height(5)
+
+	statsContent := fmt.Sprintf(
+		"Total:   %d\nStarred: %d\nFolders: %d",
+		m.stats.total,
+		m.stats.starred,
+		m.stats.folders,
+	)
+
+	statsBox := statsStyle.Render(statsContent)
+
+	// Gap between logo and stats
+	gap := lipgloss.NewStyle().Width(4).Render("")
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, logo, gap, statsBox)
 }
 
 func (m model) helpView() string {
@@ -700,16 +749,6 @@ func openBrowser(u string) {
 }
 
 func Run(client *api.Client) error {
-	bookmarks, err := client.ListBookmarks("")
-	if err != nil {
-		return err
-	}
-
-	items := make([]list.Item, len(bookmarks))
-	for i, b := range bookmarks {
-		items[i] = item{bookmark: b}
-	}
-
 	ti := textinput.New()
 	ti.Placeholder = "tag1, tag2, ..."
 	ti.CharLimit = 250
@@ -719,7 +758,7 @@ func Run(client *api.Client) error {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(primaryColor)
 
-	l := list.New(items, itemDelegate{}, 0, 0)
+	l := list.New(nil, itemDelegate{}, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -740,9 +779,11 @@ func Run(client *api.Client) error {
 		spinner:    s,
 		client:     client,
 		state:      stateBrowsing,
+		isLoading:  true,
+		status:     "Fetching data...",
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err = p.Run()
+	_, err := p.Run()
 	return err
 }
